@@ -1,0 +1,54 @@
+# -*- coding: utf-8 -*-
+
+# Macro Begin: cookiecutter.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++
+import FreeCAD
+import PartDesign
+import importSVG
+import Draft
+
+import os
+
+DIR = os.getenv("COOKIECUTTER_WORKING_PATH")
+if not DIR:
+    print("COOKIECUTTER_WORKING_PATH not set ?")
+    assert False
+
+
+docname = "cookie_cutter"
+doc = App.newDocument(docname)
+body = App.activeDocument().addObject('PartDesign::Body','Body')
+
+#doc.recompute()
+
+# Make sketches from generated SVGs
+sketches = {}
+for name in "1p", "2p", "3p":
+    importSVG.insert(u"%s/%s.svg" % (DIR, name), docname)
+
+    Gui.Selection.addSelection('cookie_cutter','path_%s001' % name)
+    Gui.Selection.addSelection('cookie_cutter','path_%s' % name)
+    sk =  Draft.makeSketch(FreeCADGui.Selection.getSelection(), autoconstraints=True)
+    sk.Label = "sketch_%s" % name
+    sketches[name] = sk
+    Gui.runCommand('Std_ToggleVisibility',0)
+    Gui.Selection.clearSelection()
+
+body.addObjects(list(sketches.values()))
+
+# extrude thin sketch
+thin_perimeter = body.newObject('PartDesign::Pad','Pad_%s' % name)
+thin_perimeter.Profile = sketches["1p"]
+thin_perimeter.Length = 8.0
+
+# move 2p to 6mm
+# TODO: make configurable
+sketches["2p"].Placement = App.Placement(App.Vector(0,0,6),App.Rotation(App.Vector(0,0,1),0))
+
+# Extrude base
+base = body.newObject('PartDesign::AdditiveLoft','AdditiveLoft')
+base.Profile = sketches["3p"]
+base.Sections = sketches["2p"]
+
+FreeCAD.ActiveDocument.recompute()
+Gui.activeDocument().activeView().viewIsometric()
+Gui.SendMsgToActiveView("ViewFit")
