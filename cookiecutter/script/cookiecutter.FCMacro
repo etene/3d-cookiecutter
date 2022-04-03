@@ -5,13 +5,31 @@ import FreeCAD
 import PartDesign
 import importSVG
 import Draft
-
+from time import sleep
 import os
+import json
+import dataclasses
 
-DIR = os.getenv("COOKIECUTTER_WORKING_PATH")
-if not DIR:
-    print("COOKIECUTTER_WORKING_PATH not set ?")
-    assert False
+@dataclasses.dataclass
+class Config:
+    workdir: str
+    height: float = 9.0
+    thin_heigth: float = 1.0
+    bottom: bool = False
+
+    @classmethod
+    def load(cls):
+        env_var = os.getenv("COOKIECUTTER_CONFIG")
+        assert env_var, "COOKIECUTTER_CONFIG not set"
+        asdict = json.loads(env_var)
+        assert isinstance(asdict, dict)
+        return cls(**asdict)
+
+
+CONF = Config.load()
+
+
+assert App.ParamGet("User parameter:BaseApp/Preferences/Document").GetBool('DuplicateLabels') is False
 
 
 docname = "cookie_cutter"
@@ -19,36 +37,78 @@ doc = App.newDocument(docname)
 body = App.activeDocument().addObject('PartDesign::Body','Body')
 
 #doc.recompute()
-
+ 
 # Make sketches from generated SVGs
 sketches = {}
-for name in "1p", "2p", "3p":
-    importSVG.insert(u"%s/%s.svg" % (DIR, name), docname)
+def get_by_label(where, label: str):
+    matches = where.getObjectsByLabel(label)
+    if not matches:
+        raise RuntimeError(f"Cannot find object with label {label!r}")
+    elif len(matches) > 1:
+        raise RuntimeError(f"Multiple objects with label {label!r}")
+    return matches[0]
 
-    Gui.Selection.addSelection('cookie_cutter','path_%s001' % name)
-    Gui.Selection.addSelection('cookie_cutter','path_%s' % name)
-    sk =  Draft.makeSketch(FreeCADGui.Selection.getSelection(), autoconstraints=True)
+def find_objects(where, type_ :str, matching: str) -> dict:
+    return where.findObjects(Type=type_, Label=matching)
+
+def import_svg(name: str):
+    importSVG.insert(u"%s/%s.svg" % (CONF.workdir, name), docname)
+    imported = find_objects(doc, "Part::Feature", f"{name}.*")
+    for i in imported:
+        i.Visibility = False
+    # Make sketch from imported SVG
+    sk = Draft.makeSketch(imported, autoconstraints=True)
     sk.Label = "sketch_%s" % name
-    sketches[name] = sk
-    Gui.runCommand('Std_ToggleVisibility',0)
-    Gui.Selection.clearSelection()
+    sk.Visibility = False
+    #return sk
 
-body.addObjects(list(sketches.values()))
+def set_heigth(o, millimeters: int):
+     o.Placement.Base.z = millimeters
+
+for name in "1p", "2p", "3p":
+    import_svg(name)
+
+def make_loft(name: str, *profiles):
+    loft = doc.addObject("Part::Loft", name)
+    loft.Solid = True
+
+    loft.Sections = [doc.getObject(i) for i in profiles]
+    return loft
+
+# Move the 2 perimeter path to 6mm
+for i in find_objects(doc, "Part::Feature", "path_2p.*"):
+    set_heigth(i, CONF.height - CONF.thin_heigth)
+
+# make inner and outer lofts with 2 and 3 perimeter paths
+external_loft = make_loft("ExternalLoft", "path_2p", "path_3p")
+internal_loft = make_loft("InternalLoft", "path_2p001", "path_3p001")
+
+# subtract them
+cut = doc.addObject("Part::Cut","Cut")
+cut.Base = external_loft
+cut.Tool = internal_loft
+cut.Refine = True
 
 # extrude thin sketch
-thin_perimeter = body.newObject('PartDesign::Pad','Pad_%s' % name)
-thin_perimeter.Profile = sketches["1p"]
-thin_perimeter.Length = 8.0
+thin_perimeter = body.newObject('PartDesign::Pad','cutting_part')
+thin_perimeter.Profile = get_by_label(doc, "sketch_1p")
+thin_perimeter.Length = CONF.height
+thin_perimeter.Refine = True
 
-# move 2p to 6mm
-# TODO: make configurable
-sketches["2p"].Placement = App.Placement(App.Vector(0,0,6),App.Rotation(App.Vector(0,0,1),0))
+if CONF.bottom:
+    # add bottom
+    bottom_binder = body.newObject('PartDesign::SubShapeBinder','bottom_binder')
+    bottom_binder.Support = get_by_label(doc, "path_1p")
+    bottom = body.newObject('PartDesign::Pad','bottom')
+    bottom.Profile =  bottom_binder
+    bottom.Length = 0.8
+    bottom.Refine = True
 
-# Extrude base
-base = body.newObject('PartDesign::AdditiveLoft','AdditiveLoft')
-base.Profile = sketches["3p"]
-base.Sections = sketches["2p"]
+# Fuse the whole thing
+fusion = doc.addObject("Part::MultiFuse","Fusion")
+fusion.Shapes = [cut, body]
+fusion.Refine = True
 
-FreeCAD.ActiveDocument.recompute()
+doc.recompute()
 Gui.activeDocument().activeView().viewIsometric()
 Gui.SendMsgToActiveView("ViewFit")

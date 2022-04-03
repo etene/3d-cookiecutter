@@ -1,8 +1,10 @@
 #!/bin/env python3
 import argparse
+import json
 from logging import getLogger
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from shutil import copyfile
 
 from cookiecutter import freecad, inkscape, svg
 
@@ -49,6 +51,9 @@ def generate_svgs(
         outfile = to_directory / f"{name}.svg"
         with outfile.open("wb") as fp:
             tree.write(fp)
+        # save a copy for debugging purposes
+        copyfile(outfile, to_directory / f"{name}.path.svg")
+        print("working directory:", to_directory)
         # turn the path into a shape (2 paths)
         inkscape.stroke_to_path(outfile, simplify)
 
@@ -77,6 +82,10 @@ def get_parser() -> argparse.ArgumentParser:
         "-m", "--max-perimeters", type=int, default=3, metavar="N",
         help="Number of 3D printed perimeters at the widest (base) part."
     )
+    psr.add_argument(
+        "-b", "--bottom", default=False, action="store_true",
+        help="Whether to add a bottom to the cookiecutter",
+    )
     return psr
 
 
@@ -100,7 +109,12 @@ def main():
         )
         # Run the freecad script on them
         script_location = Path(__file__).parent.joinpath("script", "cookiecutter.FCMacro")
-        freecad.run(script_location, COOKIECUTTER_WORKING_PATH=output_dir)
+        freecad.run(script_location, COOKIECUTTER_CONFIG=json.dumps(
+            {
+                "workdir": str(output_dir),
+                "bottom": args.bottom,
+            }
+        ))
 
 
 if __name__ == "__main__":

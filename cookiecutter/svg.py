@@ -25,6 +25,19 @@ class SVGStyle(dict):
         return ";".join(f"{k}:{v}" for k, v in self.items())
 
 
+def set_document_units(xml_root: ET.Element, units: str = "mm"):
+    namedviews = xml_root.findall('{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}namedview')
+    assert len(namedviews) == 1
+    namedview = namedviews[0]
+    namedview.attrib["{http://www.inkscape.org/namespaces/inkscape}document-units"] = units
+
+
+def raise_on_transforms(xml_root: ET.Element):
+    for item in xml_root.iter():
+        if "transform" in item.attrib:
+            raise NotImplementedError("transforms are not supported")
+
+
 def set_stroke_width(xml_file: Path, path_id: str, width: str) -> ET:
     """Sets path ID and stroke with for the path in the given file"""
     with xml_file.open("rt") as fp:
@@ -35,6 +48,8 @@ def set_stroke_width(xml_file: Path, path_id: str, width: str) -> ET:
         raise LookupError("No path found in xml file")
     if len(paths) != 1:
         raise LookupError(f"{xml_file}: 1 path expected, {len(paths)} found")
+    raise_on_transforms(xml_root=root)
+    set_document_units(xml_root=root)
     path = paths[0]
     style = SVGStyle.parse(path.attrib["style"])
     style["stroke-width"] = width
